@@ -1,0 +1,11 @@
+tensorflow==1.15.3
+pandas==1.0.5
+numpy==1.19.1
+# orchestration
+dagster==0.8.9
+dagit==0.8.9
+
+
+# testing
+pytest==5.4.3
+hypothesis==5.23.3
