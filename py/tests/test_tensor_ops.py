@@ -11,20 +11,151 @@ def session():
         yield sess
 
 
-def test_simple_case(session: tf.Session):
-    query = tf.constant([1, 3, 6], dtype=tf.float32)
-    key = tf.constant([1, 1, 1], dtype=tf.float32)
-    value = tf.constant([10, 10, 10], dtype=tf.float32)
+def test_single_example_batch_single_step_sequence_with_high_dimension(
+    session: tf.Session,
+):
+    # (?, k, dk) = (1, 1, 4)
+    query_1 = [[1, 2, 3, 4]]
+    key_1 = [[1, 1, 1, 1]]
+    value_1 = [[10, 10, 10, 10]]
+
+    query = tf.cast([query_1], dtype=tf.float32)
+    key = tf.cast([key_1], dtype=tf.float32)
+    value = tf.cast([value_1], dtype=tf.float32)
+
+    expected_att_1 = [[1.0]]
+    expected_output_1 = [[10.0, 10.0, 10.0, 10.0]]
+
+    expected_attention = np.array([expected_att_1])
+    expected_value = np.array([expected_output_1])
 
     output_op = tensor_ops.attention(query, key, value)
-
-    expected_attention, expected_value = (
-        np.array([0.00925714, 0.0523235, 0.93841936]),
-        np.array([0.0925714, 0.523235, 9.384194]),
-    )
     output_attention, output_value = session.run(output_op)
 
     np.testing.assert_array_almost_equal(
-        output_attention, expected_attention, decimal=6,
+        output_attention, expected_attention, decimal=3,
     )
-    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=6)
+    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=3)
+
+
+def test_single_example_batch_multi_step_sequence_with_high_dimension(
+    session: tf.Session,
+):
+    # (?, k, dk) = (1, 2, 4)
+    query_1 = [[1, 3, 5, 7], [2, 4, 6, 8]]
+    key_1 = [[1, 1, 1, 1], [1, 1, 1, 1]]
+    value_1 = [[10, 10, 10, 10], [50, 50, 50, 50]]
+
+    query = tf.cast([query_1], dtype=tf.float32)
+    key = tf.cast([key_1], dtype=tf.float32)
+    value = tf.cast([value_1], dtype=tf.float32)
+
+    expected_att_1 = [[0.5, 0.5], [0.5, 0.5]]
+    expected_output_1 = [[30.0, 30.0, 30.0, 30.0], [30.0, 30.0, 30.0, 30.0]]
+
+    expected_attention = np.array([expected_att_1])
+    expected_value = np.array([expected_output_1])
+
+    output_op = tensor_ops.attention(query, key, value)
+    output_attention, output_value = session.run(output_op)
+
+    np.testing.assert_array_almost_equal(
+        output_attention, expected_attention, decimal=3,
+    )
+    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=3)
+
+
+def test_single_example_batch_multi_step_sequence_with_single_dimension(
+    session: tf.Session,
+):
+    # (?, k, dk) = (1, 4, 1)
+    query_1 = [[1], [2], [3], [4]]
+    key_1 = [[1], [1], [1], [1]]
+    value_1 = [10], [10], [10], [10]
+
+    query = tf.cast([query_1], dtype=tf.float32)
+    key = tf.cast([key_1], dtype=tf.float32)
+    value = tf.cast([value_1], dtype=tf.float32)
+
+    expected_att_1 = [
+        [1 / 4, 1 / 4, 1 / 4, 1 / 4],
+        [1 / 4, 1 / 4, 1 / 4, 1 / 4],
+        [1 / 4, 1 / 4, 1 / 4, 1 / 4],
+        [1 / 4, 1 / 4, 1 / 4, 1 / 4],
+    ]
+    expected_output_1 = [[10], [10], [10], [10]]
+
+    expected_attention = np.array([expected_att_1])
+    expected_value = np.array([expected_output_1])
+
+    output_op = tensor_ops.attention(query, key, value)
+    output_attention, output_value = session.run(output_op)
+
+    np.testing.assert_array_almost_equal(
+        output_attention, expected_attention, decimal=3,
+    )
+    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=3)
+
+
+def test_multi_example_batch_multi_step_sequence_with_high_dimension(
+    session: tf.Session,
+):
+    # (?, k, dk) = (2, 2, 4)
+    query_1 = [[1, 3, 5, 7], [2, 4, 6, 8]]
+    query_2 = [[1, 3, 5, 7], [2, 4, 6, 8]]
+    key_1 = [[1, 1, 1, 1], [1, 1, 1, 1]]
+    key_2 = [[1, 2, 1, 2], [2, 1, 2, 1]]
+    value_1 = [[10, 10, 10, 10], [50, 50, 50, 50]]
+    value_2 = [[10, 10, 10, 10], [50, 50, 50, 50]]
+
+    query = tf.cast([query_1, query_2], dtype=tf.float32)
+    key = tf.cast([key_1, key_2], dtype=tf.float32)
+    value = tf.cast([value_1, value_2], dtype=tf.float32,)
+
+    expected_att_1 = [[0.5, 0.5], [0.5, 0.5]]
+    expected_att_2 = [[0.881, 0.119], [0.881, 0.119]]
+    expected_output_1 = [[30.0, 30.0, 30.0, 30.0], [30.0, 30.0, 30.0, 30.0]]
+    expected_output_2 = [
+        [369 / 25, 369 / 25, 369 / 25, 369 / 25],
+        [369 / 25, 369 / 25, 369 / 25, 369 / 25],
+    ]
+
+    expected_attention = np.array([expected_att_1, expected_att_2])
+    expected_value = np.array([expected_output_1, expected_output_2])
+
+    output_op = tensor_ops.attention(query, key, value)
+
+    output_attention, output_value = session.run(output_op)
+
+    np.testing.assert_array_almost_equal(
+        output_attention, expected_attention, decimal=3,
+    )
+    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=2)
+
+
+def test_single_example_batch_multi_step_sequence_with_high_dimension_and_different_value_dimension(
+    session: tf.Session,
+):
+    # (?, k, dk) = (1, 2, 4)
+    query_1 = [[1, 3, 5, 7], [2, 4, 6, 8]]
+    key_1 = [[1, 1, 1, 1], [1, 1, 1, 1]]
+    # (?, k, dv) = (1, 2, 5)
+    value_1 = [[10, 10, 10, 10, 10], [50, 50, 50, 50, 50]]
+
+    query = tf.cast([query_1], dtype=tf.float32)
+    key = tf.cast([key_1], dtype=tf.float32)
+    value = tf.cast([value_1], dtype=tf.float32)
+
+    expected_att_1 = [[0.5, 0.5], [0.5, 0.5]]
+    expected_output_1 = [[30.0, 30.0, 30.0, 30.0, 30.0], [30.0, 30.0, 30.0, 30.0, 30.0]]
+
+    expected_attention = np.array([expected_att_1])
+    expected_value = np.array([expected_output_1])
+
+    output_op = tensor_ops.attention(query, key, value)
+    output_attention, output_value = session.run(output_op)
+
+    np.testing.assert_array_almost_equal(
+        output_attention, expected_attention, decimal=3,
+    )
+    np.testing.assert_array_almost_equal(output_value, expected_value, decimal=3)
