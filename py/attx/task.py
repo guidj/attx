@@ -114,14 +114,14 @@ def create_estimator(
     embedding_size = params["embedding_size"]
 
     token_id = tf.feature_column.categorical_column_with_vocabulary_list(
-        key="sequence", 
-        vocabulary_list=data.VOCAB,
-        num_oov_buckets=0
+        key="sequence", vocabulary_list=data.VOCAB, num_oov_buckets=0
     )
-    sequence_feature = tf.feature_column.embedding_column(token_id, dimension=embedding_size, combiner="mean")
+    sequence_feature = tf.feature_column.embedding_column(
+        token_id, dimension=embedding_size, combiner="mean"
+    )
 
     columns = [sequence_feature]
-    
+
     estimator = tf.estimator.DNNClassifier(
         feature_columns=columns,
         hidden_units=layers_config,
