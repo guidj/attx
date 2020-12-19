@@ -114,28 +114,28 @@ def model_fn(
     embedding_table = create_token_lookup(data.VOCAB_INDEX)
     alphabet_embeddings = create_embeddings(embedding_size)
 
-    token_ids = embedding_table.lookup(features["sequence"])
-    target_ids = embedding_table.lookup(labels["target"])
+    token_ids = embedding_table.lookup(features["sequence"], name="example/sequence/tokens")
+    target_ids = embedding_table.lookup(labels["target"], name="example/target/tokens")
     # examples x rows x dim-size => examples x dim-size
-    embeddings = tf.nn.embedding_lookup(alphabet_embeddings, token_ids)
+    embeddings = tf.nn.embedding_lookup(alphabet_embeddings, token_ids, name="example/sequence/embeddings")
     # average embeddings per example
-    embeddings_agg = tf.reduce_mean(embeddings, axis=1)
-    targets = tf.one_hot(target_ids, depth=data.VOCAB_SIZE)
+    embeddings_agg = tf.reduce_mean(embeddings, axis=1, name="example/sequence/agg_embeddings")
+    targets = tf.one_hot(target_ids, depth=data.VOCAB_SIZE, name="example/target/OHE")
 
     layers = []
     prev_layer = embeddings_agg
-    for size in layers_config:
-        layer = tf.layers.dense(prev_layer, units=size)
-        prev_layer = tf.nn.elu(layer)
+    for idx, size in enumerate(layers_config):
+        layer = tf.layers.dense(prev_layer, units=size, name=f"fcc/{idx}")
+        prev_layer = tf.nn.elu(layer, name=f"fcc/{idx}/elu")
         layers.append(prev_layer)
 
-    logits = tf.layers.dense(layers[-1], units=data.VOCAB_SIZE)
-    predictions = tf.nn.softmax(logits)
+    logits = tf.layers.dense(layers[-1], units=data.VOCAB_SIZE, name="classifier/logits")
+    predictions = tf.nn.softmax(logits, name="classifier/softmax")
 
     if mode == tf.estimator.ModeKeys.PREDICT:
         return tf.estimator.EstimatorSpec(mode, predictions=predictions)
 
-    loss = tf.nn.softmax_cross_entropy_with_logits(labels=targets, logits=logits)
+    loss = tf.nn.softmax_cross_entropy_with_logits(labels=targets, logits=logits, name="loss")
     optimizer = tf.train.AdamOptimizer()
     train_op = optimizer.minimize(loss)
 
