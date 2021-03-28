@@ -1,20 +1,59 @@
+import argparse
+import dataclasses
+import logging
 import os.path
 import tempfile
 import uuid
-from typing import Optional, Callable, Tuple, Dict, Any, List, Generator, List
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops import lookup_ops
 
 from attx import data
-from attx.typedef import FeatureSpec, Tensor
-from attx.typedef import TensorSpec
-
+from attx.typedef import FeatureSpec, Tensor, TensorSpec
 
 SEQ_LEN = 50
-EMBEDDING_SIZE = 8
 MIN_SEQ_LEN = 3
+DEFAULT_STEPS = 500
+
+DNN = "dnn"
+RNN = "rnn"
+MEAN = "mean"
+SQRTN = "sqrtn"
+SUM = "sum"
+ARCH = [DNN, RNN]
+EMBEDDING_REDUCE = [MEAN, SQRTN, SUM]
+
+
+@dataclasses.dataclass
+class ModelArgs:
+    embedding_size: int
+    embedding_method: str
+    arch: str
+
+
+def parse_args() -> argparse.Namespace:
+    arg_parser = argparse.ArgumentParser("Next Token: Supervised Learning")
+    arg_parser.add_argument("--arch", type=str, default="dnn", choices=ARCH)
+    arg_parser.add_argument("--embedding-size", type=int, default=16)
+
+    arg_parser.add_argument(
+        "--embedding-method", type=str, default="mean", choices=EMBEDDING_REDUCE
+    )
+    arg_parser.add_argument("--batch-size", type=int, default=64)
+    arg_parser.add_argument("--max-steps", type=int, default=1000000)
+    arg_parser.add_argument("--eval-steps", type=int, default=10)
+    arg_parser.add_argument(
+        "--model-dir",
+        type=str,
+        default=os.path.join(tempfile.gettempdir(), str(uuid.uuid4())),
+    )
+    args, _ = arg_parser.parse_known_args()
+
+    logging.info("Parsed arguments:")
+    for key, value in vars(args).items():
+        logging.info("\t%s: %s", key, value)
+    return args
 
 
 def create_train_and_eval_input_functions(
@@ -105,59 +144,142 @@ def features_and_label_spec() -> Tuple[FeatureSpec, FeatureSpec]:
 
 
 def create_estimator(
-    model_dir: str, config: Optional[tf.estimator.RunConfig], params: Dict[str, Any]
+    model_dir: str,
+    config: Optional[tf.estimator.RunConfig],
+    params: Dict[str, Any],
+    model_args: ModelArgs,
 ) -> tf.estimator.Estimator:
     """
     Returns an estimator.
     """
     layers_config = params["layers_config"]
-    embedding_size = params["embedding_size"]
 
-    token_id = tf.feature_column.categorical_column_with_vocabulary_list(
-        key="sequence", vocabulary_list=data.VOCAB, num_oov_buckets=0
-    )
-    sequence_feature = tf.feature_column.embedding_column(
-        token_id, dimension=embedding_size, combiner="mean"
-    )
-
-    columns = [sequence_feature]
-
-    estimator = tf.estimator.DNNClassifier(
-        feature_columns=columns,
-        hidden_units=layers_config,
-        n_classes=data.VOCAB_SIZE,
-        optimizer=tf.keras.optimizers.Adam(),
-        label_vocabulary=data.VOCAB,
-        activation_fn=tf.nn.elu,
-        dropout=0.2,
-        batch_norm=True,
-    )
+    if model_args.arch == DNN:
+        token_id = tf.feature_column.categorical_column_with_vocabulary_list(
+            key="sequence", vocabulary_list=data.VOCAB, num_oov_buckets=0
+        )
+        sequence_feature = tf.feature_column.embedding_column(
+            token_id,
+            dimension=model_args.embedding_size,
+            combiner=model_args.embedding_method,
+        )
+        columns = [sequence_feature]
+        estimator = tf.estimator.DNNClassifier(
+            model_dir=model_dir,
+            config=config,
+            feature_columns=columns,
+            hidden_units=layers_config,
+            n_classes=data.VOCAB_SIZE,
+            optimizer=tf.keras.optimizers.Adam(),
+            label_vocabulary=data.VOCAB,
+            activation_fn=tf.nn.elu,
+            dropout=0.0,
+            batch_norm=False,
+        )
+    elif model_args.arch == RNN:
+        token_id = tf.feature_column.sequence_categorical_column_with_vocabulary_list(
+            key="sequence", vocabulary_list=data.VOCAB, num_oov_buckets=0
+        )
+        sequence_feature = tf.feature_column.embedding_column(
+            token_id, dimension=model_args.embedding_size
+        )
+        columns = [sequence_feature]
+        estimator = tf.estimator.experimental.RNNClassifier(
+            model_dir=model_dir,
+            config=config,
+            sequence_feature_columns=columns,
+            units=layers_config,
+            cell_type="lstm",
+            n_classes=data.VOCAB_SIZE,
+            label_vocabulary=data.VOCAB,
+            optimizer="Adagrad",
+        )
+    else:
+        raise ValueError(f"Arch {model_args.arch} isn't recognized")
     return estimator
 
 
 def create_hooks(log_dir: str) -> List[tf.estimator.SessionRunHook]:
-    step_counter_hook = tf.estimator.StepCounterHook(every_n_steps=100)
+    del log_dir
+    step_counter_hook = tf.estimator.StepCounterHook(every_n_steps=DEFAULT_STEPS)
     return [step_counter_hook]
 
 
-def train():
+def auc_fn(labels, predictions):
+    auc_metric = tf.keras.metrics.AUC(name="auc")
+
+    def equality(label_class_ids: Tuple[tf.Tensor, tf.Tensor]) -> tf.Tensor:
+        label, class_ids = label_class_ids
+        return tf.equal(label, class_ids)
+
+    indices = tf.where(
+        tf.map_fn(
+            equality,
+            elems=(labels, predictions["all_classes"]),
+            fn_output_signature=tf.bool,
+        )
+    )
+    y_true = tf.one_hot(indices[:, 1], depth=data.VOCAB_SIZE)
+    y_true = tf.squeeze(y_true)
+    auc_metric.update_state(y_true=y_true, y_pred=predictions["probabilities"])
+    return {"auc": auc_metric}
+
+
+def add_metrics(estimator: tf.estimator.Estimator) -> tf.estimator.Estimator:
+    return tf.estimator.add_metrics(estimator, auc_fn)
+
+
+def train(
+    model_dir: str,
+    max_steps: int,
+    eval_steps: int,
+    batch_size: int,
+    model_args: ModelArgs,
+):
     # params
-    model_dir = os.path.join(tempfile.gettempdir(), str(uuid.uuid4()))
-    params = {"layers_config": [8, 8, 8], "embedding_size": 16}
-    config = tf.estimator.RunConfig()
+    params = {"layers_config": [12, 12, 12]}
+    config = tf.estimator.RunConfig(
+        model_dir=model_dir,
+        save_summary_steps=DEFAULT_STEPS,
+        # eval run when a checkpoint is saved
+        save_checkpoints_steps=DEFAULT_STEPS * 10,
+        log_step_count_steps=DEFAULT_STEPS,
+    )
 
     # setup
-    estimator = create_estimator(model_dir, config, params)
-    train_input_fn, eval_input_fn = create_train_and_eval_input_functions(SEQ_LEN, 64)
+    estimator = create_estimator(model_dir, config, params, model_args)
+    estimator = add_metrics(estimator)
+    train_input_fn, eval_input_fn = create_train_and_eval_input_functions(
+        SEQ_LEN, batch_size=batch_size
+    )
 
     hooks = create_hooks(model_dir)
     train_spec = tf.estimator.TrainSpec(
-        input_fn=train_input_fn, hooks=hooks, max_steps=1000
+        input_fn=train_input_fn, hooks=hooks, max_steps=max_steps
     )
-    eval_spec = tf.estimator.EvalSpec(input_fn=eval_input_fn)
+    eval_spec = tf.estimator.EvalSpec(
+        input_fn=eval_input_fn,
+        steps=eval_steps,
+        start_delay_secs=0,
+        throttle_secs=0,
+    )
 
-    tf.estimator.train_and_evaluate(estimator, train_spec, eval_spec)
+    # run train/eval loop
+    tf.estimator.train_and_evaluate(
+        estimator, train_spec=train_spec, eval_spec=eval_spec
+    )
 
 
 if __name__ == "__main__":
-    train()
+    args = parse_args()
+    train(
+        model_dir=args.model_dir,
+        max_steps=args.max_steps,
+        eval_steps=args.eval_steps,
+        batch_size=args.batch_size,
+        model_args=ModelArgs(
+            embedding_size=args.embedding_size,
+            embedding_method=args.embedding_method,
+            arch=args.arch,
+        ),
+    )
