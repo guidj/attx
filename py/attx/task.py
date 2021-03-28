@@ -1,17 +1,15 @@
+import argparse
+import logging
 import os.path
 import tempfile
 import uuid
-from typing import Optional, Callable, Tuple, Dict, Any, List, Generator, List
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 import tensorflow as tf
 
-
 from attx import data
-from attx.typedef import FeatureSpec, Tensor
-from attx.typedef import TensorSpec
-import argparse
-
+from attx.typedef import FeatureSpec, Tensor, TensorSpec
 
 SEQ_LEN = 50
 MIN_SEQ_LEN = 3
@@ -27,6 +25,10 @@ def parse_args() -> argparse.Namespace:
         default=os.path.join(tempfile.gettempdir(), str(uuid.uuid4())),
     )
     args, _ = arg_parser.parse_known_args()
+
+    logging.info("Parsed arguments:")
+    for key, value in vars(args).items():
+        logging.info("\t%s: %s", key, value)
     return args
 
 
@@ -136,6 +138,8 @@ def create_estimator(
     columns = [sequence_feature]
 
     estimator = tf.estimator.DNNClassifier(
+        model_dir=model_dir,
+        config=config,
         feature_columns=columns,
         hidden_units=layers_config,
         n_classes=data.VOCAB_SIZE,
@@ -149,6 +153,7 @@ def create_estimator(
 
 
 def create_hooks(log_dir: str) -> List[tf.estimator.SessionRunHook]:
+    del log_dir
     step_counter_hook = tf.estimator.StepCounterHook(every_n_steps=1000)
     return [step_counter_hook]
 
