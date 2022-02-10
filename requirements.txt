@@ -1,6 +1,6 @@
 tensorflow==2.5.3
 pandas==1.0.5
-numpy==1.19.1
+numpy==1.21.0
 # orchestration
 dagster==0.8.9
 dagit==0.8.9
